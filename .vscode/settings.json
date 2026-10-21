@@ -1,0 +1,4 @@
+﻿{
+    "verilog.linting.linter": "iverilog",
+    "verilog.linting.iverilog.verilogHDL.standard": "Verilog-2005"
+}
