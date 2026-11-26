@@ -17,10 +17,16 @@ module Register(
    always @(*) begin
     if (Readregister1 == 5'd0)
        Readdata1 = 64'b0;
+    else if (Regwrite && (Writeregister != 5'd0) &&
+             (Writeregister == Readregister1))
+       Readdata1 = Writedata;
     else
        Readdata1 = registers[Readregister1];
     if (Readregister2 == 5'd0)
        Readdata2 = 64'b0;
+    else if (Regwrite && (Writeregister != 5'd0) &&
+             (Writeregister == Readregister2))
+       Readdata2 = Writedata;
     else
        Readdata2 = registers[Readregister2];
 

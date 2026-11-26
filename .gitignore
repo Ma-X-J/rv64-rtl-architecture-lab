@@ -6,10 +6,18 @@ build/
 *.fst
 *.lxt
 *.lxt2
+*.o
+*.elf
+*.bin
+*.map
+*.bc
 
 # Python cache files
 __pycache__/
 *.py[cod]
+
+# Local development toolchains and downloaded archives
+.tools/
 
 # Vivado session and temporary files
 .Xil/

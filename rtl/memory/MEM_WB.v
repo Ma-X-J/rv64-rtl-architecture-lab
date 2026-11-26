@@ -8,6 +8,7 @@ module MEM_WB(
     input Regwrite_in,
     input clk,
     input reset,
+    input MEM_WB_write,
     input [63:0]CSR_rdata_in,
     input CSRtoReg_in,
     output reg [63:0]readdata_out,
@@ -39,7 +40,7 @@ module MEM_WB(
       CSR_rdata_out     <= 64'b0;
       CSRtoReg_out      <= 1'b0;
     end
-    else begin
+    else if(MEM_WB_write) begin
       readdata_out      <= readdata_in;
       ALUresult_out     <= ALUresult_in;
       MemtoReg_out      <= MemtoReg_in;
@@ -49,6 +50,17 @@ module MEM_WB(
       Regwrite_out      <= Regwrite_in;
       CSR_rdata_out     <= CSR_rdata_in;
       CSRtoReg_out      <= CSRtoReg_in;
+    end
+    else begin
+      readdata_out      <= readdata_out;
+      ALUresult_out     <= ALUresult_out;
+      MemtoReg_out      <= MemtoReg_out;
+      instruction64_out <= instruction64_out;
+      instruction_out   <= instruction_out;
+      pc_plus4_out      <= pc_plus4_out;
+      Regwrite_out      <= Regwrite_out;
+      CSR_rdata_out     <= CSR_rdata_out;
+      CSRtoReg_out      <= CSRtoReg_out;
     end
       
   end

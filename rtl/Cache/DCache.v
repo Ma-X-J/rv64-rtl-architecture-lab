@@ -6,6 +6,7 @@ module DCache(
     input [63:0]cpu_req_addr,
     input cpu_req_write,
     input [63:0]cpu_req_wdata,
+    input [7:0]cpu_req_wstrb,
     output cpu_req_ready,//Cache is ready for a new request
     output cpu_resp_valid,//the request has been done(response valid)
     output reg [63:0]cpu_resp_rdata,//the data from LOAD
@@ -17,7 +18,8 @@ module DCache(
     output mem_req_valid,//have a request for 访问 backend
     output mem_req_write,//read or write backend
     output reg [63:0]mem_req_addr,//Byte address
-    output [63:0]mem_req_wdata//write data
+    output [63:0]mem_req_wdata,//write data
+    output [7:0]mem_req_wstrb
 
    
 
@@ -84,7 +86,9 @@ module DCache(
   wire [2:0]cpu_addr_index = cpu_req_addr[7:5];
   wire [1:0]cpu_addr_word_offset = cpu_req_addr[4:3];
   wire [2:0]cpu_addr_byte_offset = cpu_req_addr[2:0];
-  wire cpu_addr_aligned = cpu_addr_byte_offset == 0;
+  // Access-size alignment is checked in the CPU before a request reaches the
+  // cache.  A legal subword access may have any byte offset within this word.
+  wire cpu_addr_aligned = 1'b1;
   wire [63:0]cpu_line_base = {cpu_req_addr[63:5],5'b0};
 
 
@@ -95,6 +99,7 @@ module DCache(
   reg [63:0]req_addr_reg;//保存原始请求地址
   reg req_write_reg;//保存ld/sd的类型
   reg [63:0]req_wdata_reg;//save the data of SD
+  reg [7:0]req_wstrb_reg;
   wire [55:0]req_tag = req_addr_reg[63:8];
   wire [2:0]req_index = req_addr_reg[7:5];
   wire [1:0]req_word_offset = req_addr_reg[4:3];//byte offset = 地址低3位 = 3‘b000，这里直接不写
@@ -185,13 +190,24 @@ module DCache(
     assign mem_req_write = mem_req_valid && (state == STATE_STORE_REQ);
     
     assign mem_req_wdata = mem_req_write ? req_wdata_reg : 64'b0;
+    assign mem_req_wstrb = mem_req_write ? req_wstrb_reg : 8'b0;
 
-    //修改mem_req_addr的输出逻辑，如果是store则写入req_addr_reg
+    wire [63:0]store_byte_mask = {
+      {8{req_wstrb_reg[7]}}, {8{req_wstrb_reg[6]}},
+      {8{req_wstrb_reg[5]}}, {8{req_wstrb_reg[4]}},
+      {8{req_wstrb_reg[3]}}, {8{req_wstrb_reg[2]}},
+      {8{req_wstrb_reg[1]}}, {8{req_wstrb_reg[0]}}
+    };
+    wire [63:0]merged_store_word =
+      (data_array[req_index][req_word_offset] & ~store_byte_mask) |
+      (req_wdata_reg & store_byte_mask);
+
+//（LOAD MISS 后cache line填充过程，STORE的addr查找过程）
     always @(*) begin
       if(~mem_req_valid)
         mem_req_addr = 64'b0;
       else if(mem_req_write)
-        mem_req_addr = req_addr_reg;
+        mem_req_addr = {req_addr_reg[63:3], 3'b000};
       else
         mem_req_addr = req_line_base + refill_word_byte_offset;
     end
@@ -222,6 +238,7 @@ module DCache(
     req_addr_reg <= 64'b0;
     req_write_reg <= 1'b0;
     req_wdata_reg <= 64'b0;
+    req_wstrb_reg <= 8'b0;
     refill_word_index <= 2'b0;
     valid_array <= {CACHE_LINES{1'b0}};
     store_hit_reg <= 1'b0;
@@ -233,6 +250,7 @@ module DCache(
         req_addr_reg <= cpu_req_addr;
         req_write_reg <= cpu_req_write;
         req_wdata_reg <= cpu_req_wdata;
+        req_wstrb_reg <= cpu_req_wstrb;
         store_hit_reg <= cpu_line_hit;
         state <= STATE_STORE_REQ;
       end
@@ -281,7 +299,7 @@ module DCache(
       if(store_mem_resp_fire) begin
         
        if(store_hit_reg) begin
-          data_array[req_index][req_word_offset] <= req_wdata_reg;
+          data_array[req_index][req_word_offset] <= merged_store_word;
         end  
        state <= STATE_STORE_RESP;
       end
