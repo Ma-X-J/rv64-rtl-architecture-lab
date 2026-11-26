@@ -6,7 +6,7 @@
 set script_dir [file dirname [file normalize [info script]]]
 set repo_root [file normalize [file join $script_dir ../..]]
 set project_file [file join $repo_root build vivado pipelined_cpu_rtl.xpr]
-set output_dir [file join $repo_root docs generated]
+set output_dir [file join $repo_root docs architecture generated]
 
 if {![file exists $project_file]} {
     error "Vivado project not found. Run create_rtl_project.tcl first: $project_file"

@@ -26,7 +26,7 @@ module CPU(
    wire MemWrite;
    wire ALUSrc;
    wire Regwrite;
-   wire [3:0]ALUControl;
+wire [4:0]ALUControl;
    wire zero;
    wire ALUASrc;
    wire Jump;

@@ -6,9 +6,15 @@ module IF_ID(
     input IF_IDwrite,
     input IF_ID_flush,
     input [3:0]bht_index_in,
+    input [5:0]global_index_in,
+    input bimodal_prediction_in,
+    input global_prediction_in,
     input predicted_taken_in,
     input valid_in,//用于异常，中断模块
     output reg [3:0]bht_index_out,
+    output reg [5:0]global_index_out,
+    output reg bimodal_prediction_out,
+    output reg global_prediction_out,
     output reg predicted_taken_out,
     output reg [31:0]instruction_out,
     output reg [63:0]pc_out,
@@ -21,6 +27,9 @@ module IF_ID(
       pc_out <= 64'b0;
       predicted_taken_out <= 1'b0;
       bht_index_out <= 4'b0;
+      global_index_out <= 6'b0;
+      bimodal_prediction_out <= 1'b0;
+      global_prediction_out <= 1'b0;
       valid_out <= 1'b0;
     end
     else if(IF_ID_flush) begin
@@ -28,6 +37,9 @@ module IF_ID(
       pc_out <= 64'b0;
       predicted_taken_out <= 1'b0;
       bht_index_out <= 4'b0;
+      global_index_out <= 6'b0;
+      bimodal_prediction_out <= 1'b0;
+      global_prediction_out <= 1'b0;
       valid_out <= 1'b0;
     end
     else if(~IF_IDwrite) begin
@@ -35,6 +47,9 @@ module IF_ID(
         pc_out <= pc_out;
         predicted_taken_out <= predicted_taken_out;
         bht_index_out <= bht_index_out;
+        global_index_out <= global_index_out;
+        bimodal_prediction_out <= bimodal_prediction_out;
+        global_prediction_out <= global_prediction_out;
         valid_out <= valid_out;
     end
     else begin
@@ -42,6 +57,9 @@ module IF_ID(
       pc_out <= current_pc;
       predicted_taken_out <= predicted_taken_in;
       bht_index_out <= bht_index_in;
+      global_index_out <= global_index_in;
+      bimodal_prediction_out <= bimodal_prediction_in;
+      global_prediction_out <= global_prediction_in;
       valid_out <= valid_in;
 
     end

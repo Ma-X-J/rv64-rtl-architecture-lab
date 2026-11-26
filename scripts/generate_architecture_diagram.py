@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "docs" / "images" / "pipelined-cpu-architecture.svg"
+OUTPUT = ROOT / "docs" / "architecture" / "pipelined-cpu-architecture.svg"
 
 WIDTH = 1920
 HEIGHT = 1200
@@ -282,12 +282,12 @@ def generate_svg() -> str:
     parts.append("</defs>")
     add(parts, "rect", x=0, y=0, width=WIDTH, height=HEIGHT, fill="#FFFFFF")
 
-    text(parts, 55, 54, "RV64 五级流水线 CPU 总体结构", 34, 800, COLORS["ink"], "start")
+    text(parts, 55, 54, "RV64 RTL Architecture Lab", 34, 800, COLORS["ink"], "start")
     text(
         parts,
         55,
         84,
-        "单发射 · 顺序执行/提交 · 前递与冒险检测 · 两位分支预测 · 阻塞式 I/D Cache · 机器模式 Trap/CSR",
+        "单发射 · 顺序执行/提交 · 前递与冒险检测 · 可配置竞赛预测 · 阻塞式 I/D Cache · 机器模式 Trap/CSR",
         16,
         500,
         COLORS["muted"],
@@ -379,7 +379,7 @@ def generate_svg() -> str:
     # Main blocks.
     block(parts, 70, 245, 80, 82, "PC", "u_pc", ["64-bit"], COLORS["if_fill"], COLORS["data"], 20)
     block(parts, 180, 225, 155, 125, "I-Cache", "u_icache", ["直接映射 · 阻塞式", "8行 × 32B"], COLORS["cache_fill"], COLORS["memory"])
-    block(parts, 70, 420, 265, 90, "两位分支预测", "u_branchpredictionunit", ["16项BHT · PC[5:2]索引"], "#F2EFFF", COLORS["feedback"])
+    block(parts, 70, 420, 265, 90, "可配置分支预测", "u_branchpredictionunit", ["BHT / 全局相关 / 竞赛"], "#F2EFFF", COLORS["feedback"])
 
     pipeline_register(parts, 380, "IF/ID", ["PC", "Instr", "Predict", "Valid"])
 
@@ -427,7 +427,7 @@ def generate_svg() -> str:
     label(parts, 1535, 281, "Load data", COLORS["data"], 82)
     label(parts, 1397, 574, "ALU / PC+4 / CSR旁路", COLORS["data"], 170)
     label(parts, 1030, 597, "WB写回反馈", COLORS["data"], 105)
-    label(parts, 474, 552, "MEM结果更新BHT", COLORS["feedback"], 126)
+    label(parts, 474, 552, "MEM结果训练预测器", COLORS["feedback"], 140)
     label(parts, 1380, 690, "D-Cache stall", COLORS["control"], 108)
     label(parts, 385, 690, "I-Cache等待", COLORS["control"], 98)
     label(parts, 47, 705, "redirect", COLORS["trap"], 72)

@@ -1,4 +1,5 @@
-﻿{
+{
     "verilog.linting.linter": "iverilog",
-    "verilog.linting.iverilog.verilogHDL.standard": "Verilog-2005"
+    "verilog.linting.iverilog.verilogHDL.standard": "SystemVerilog",
+    "cmake.sourceDirectory": "${workspaceFolder}/compiler/llvm_passes/ir_stats"
 }

@@ -1,7 +1,18 @@
 
 
 
-module PIPELINED_CPU(
+module PIPELINED_CPU #(
+    // 0: bimodal BHT, 1: non-speculative global predictor,
+    // 2: tournament predictor selecting between the two.
+    parameter BRANCH_PREDICTOR_MODE = 0,
+    // Smallest practical capacities for the current CoreMark build:
+    // about 11.7 KiB text plus startup, and 2 KiB static data plus stack.
+    parameter integer ICACHE_BACKING_WORDS = 2048, // 16 KiB
+    parameter integer DCACHE_BACKING_WORDS = 1024, // 8 KiB
+    // Unified CPU address map over separate instruction/data arrays.
+    parameter [63:0] ICACHE_BACKING_BASE_ADDR = 64'h0000_0000_0000_0000,
+    parameter [63:0] DCACHE_BACKING_BASE_ADDR = 64'h0000_0000_0000_4000
+)(
     input reset,
     input clk,
     input external_interrupt_pending//需要连接外部的驱动，所以要放在input里
@@ -68,7 +79,7 @@ module PIPELINED_CPU(
    wire [1:0]  CSROp_ex;
    wire        CSRUseImm_ex;
    wire        CSRtoReg_ex;
-   wire [3:0]  ALUControl_ex;
+   wire [4:0]  ALUControl_ex;
    wire [63:0] aluresult_ex;
    wire        zero_ex;
    wire [63:0] branch_pc_ex;
@@ -101,21 +112,40 @@ module PIPELINED_CPU(
     zero_mem;//必须要结合funct3来判断是beq还是bne，不然只用branch，bne和beq都是1，判断不出
 
    wire bne_taken_mem = Branch_mem && (instruction_mem[14:12] == 3'b001) && !zero_mem;
+   wire blt_taken_mem = Branch_mem && (instruction_mem[14:12] == 3'b100) && !zero_mem;
+   wire bge_taken_mem = Branch_mem && (instruction_mem[14:12] == 3'b101) && !zero_mem;
+   wire bltu_taken_mem = Branch_mem && (instruction_mem[14:12] == 3'b110) && !zero_mem;
+   wire bgeu_taken_mem = Branch_mem && (instruction_mem[14:12] == 3'b111) && !zero_mem;
     
 
-    wire branch_taken_mem = beq_taken_mem || bne_taken_mem;
+    wire branch_taken_mem = beq_taken_mem || bne_taken_mem ||
+                            blt_taken_mem || bge_taken_mem ||
+                            bltu_taken_mem || bgeu_taken_mem;
     ///wire ID_EX_flush_final = ID_EX_flush_hazard || control_flush_mem;
     ///wire PCwrite_final = PCwrite_hazard || control_flush_mem;
 
     //branch prediction unit
     wire predicted_taken_if;
     wire [3:0]bht_index_if;
+    wire [5:0]global_index_if;
+    wire bimodal_prediction_if;
+    wire global_prediction_if;
+    wire chooser_prefers_global_if;
     wire predicted_taken_id;
     wire [3:0]bht_index_id;
+    wire [5:0]global_index_id;
+    wire bimodal_prediction_id;
+    wire global_prediction_id;
     wire predicted_taken_ex;
     wire [3:0]bht_index_ex;
+    wire [5:0]global_index_ex;
+    wire bimodal_prediction_ex;
+    wire global_prediction_ex;
     wire predicted_taken_mem;
     wire [3:0]bht_index_mem;
+    wire [5:0]global_index_mem;
+    wire bimodal_prediction_mem;
+    wire global_prediction_mem;
 
     //for IF immgen to calculate the branch prediction address
     wire [63:0]instruction64_if;
@@ -255,12 +285,44 @@ module PIPELINED_CPU(
     wire dcache_cpu_req_valid = MemWrite_valid_mem || MemRead_valid_mem;
     wire [63:0]dcache_cpu_req_addr = aluresult_mem;
     wire dcache_cpu_req_write = MemWrite_valid_mem;
-    wire [63:0]dcache_cpu_req_wdata = storedata_mem;
+    wire [5:0]store_shift_bits = {aluresult_mem[2:0], 3'b000};
+    reg [7:0]store_base_wstrb;
+    always @(*) begin
+      case (instruction_mem[14:12])
+        3'b000: store_base_wstrb = 8'h01; // SB
+        3'b001: store_base_wstrb = 8'h03; // SH
+        3'b010: store_base_wstrb = 8'h0f; // SW
+        3'b011: store_base_wstrb = 8'hff; // SD
+        default: store_base_wstrb = 8'h00;
+      endcase
+    end
+    wire [7:0]dcache_cpu_req_wstrb =
+      store_base_wstrb << aluresult_mem[2:0];
+    wire [63:0]dcache_cpu_req_wdata =
+      storedata_mem << store_shift_bits;
 
     //MEM D_Cache to CPU feedback(dcache_cpu)
     wire dcache_cpu_req_ready;
     wire dcache_cpu_resp_valid;
     wire [63:0]dcache_cpu_resp_rdata;
+    wire [63:0]shifted_load_word =
+      dcache_cpu_resp_rdata >> store_shift_bits;
+    reg [63:0]load_data_mem;
+    always @(*) begin
+      case (instruction_mem[14:12])
+        3'b000: load_data_mem = {{56{shifted_load_word[7]}},
+                                 shifted_load_word[7:0]};  // LB
+        3'b001: load_data_mem = {{48{shifted_load_word[15]}},
+                                 shifted_load_word[15:0]}; // LH
+        3'b010: load_data_mem = {{32{shifted_load_word[31]}},
+                                 shifted_load_word[31:0]}; // LW
+        3'b011: load_data_mem = shifted_load_word;         // LD
+        3'b100: load_data_mem = {56'b0, shifted_load_word[7:0]};
+        3'b101: load_data_mem = {48'b0, shifted_load_word[15:0]};
+        3'b110: load_data_mem = {32'b0, shifted_load_word[31:0]};
+        default: load_data_mem = 64'b0;
+      endcase
+    end
     wire dcache_cpu_req_fire = dcache_cpu_req_valid &&
                                dcache_cpu_req_ready;
     //MEM D-Cache to backend memory(dcache_mem)
@@ -268,6 +330,7 @@ module PIPELINED_CPU(
     wire dcache_mem_req_write;
     wire [63:0]dcache_mem_req_addr;
     wire [63:0]dcache_mem_req_wdata;
+    wire [7:0]dcache_mem_req_wstrb;
 
     wire dcache_mem_req_ready;
     wire dcache_mem_resp_valid;
@@ -280,6 +343,7 @@ module PIPELINED_CPU(
                              ~dcache_stall;
     wire ID_EX_write_final = ~dcache_stall;
     wire EX_MEM_write_final = ~dcache_stall;
+    wire MEM_WB_write_final = ~dcache_stall;
     wire ID_EX_flush_final = control_flush_mem ||
                                (ID_EX_flush_hazard && ~dcache_stall);
 
@@ -291,7 +355,7 @@ module PIPELINED_CPU(
                                
     wire load_complete_mem = MemRead_valid_mem && 
                               dcache_cpu_resp_valid;//Mem阶段有一条有效的load，且Dcache完成了该load
-    assign mem_readdata_mem = load_complete_mem ? dcache_cpu_resp_rdata : 64'b0; 
+    assign mem_readdata_mem = load_complete_mem ? load_data_mem : 64'b0;
     ///wire [63:0] legacy_mem_readdata;
 
     //D-cache and Trap control
@@ -322,6 +386,8 @@ module PIPELINED_CPU(
    wire [31:0] instruction_wb;
    wire [63:0] pc_plus4_wb;
    wire        Regwrite_wb;
+   wire        Regwrite_forward_wb;
+   reg         wb_stall_commit_done;
    wire        CSRtoReg_wb;
    reg  [63:0] writedata_wb;
    wire [63:0] CSR_rdata_wb;
@@ -424,8 +490,14 @@ module PIPELINED_CPU(
     .IF_ID_flush(control_flush_mem),
     .predicted_taken_in(predicted_taken_if),
     .bht_index_in(bht_index_if),
+    .global_index_in(global_index_if),
+    .bimodal_prediction_in(bimodal_prediction_if),
+    .global_prediction_in(global_prediction_if),
     .predicted_taken_out(predicted_taken_id),
     .bht_index_out(bht_index_id),
+    .global_index_out(global_index_id),
+    .bimodal_prediction_out(bimodal_prediction_id),
+    .global_prediction_out(global_prediction_id),
     .valid_in(valid_if),
     .valid_out(valid_id)
    );
@@ -457,6 +529,9 @@ module PIPELINED_CPU(
       .csr_rdata_in(CSR_rdata_effective_id),
       .predicted_taken_in(predicted_taken_id),
      .bht_index_in(bht_index_id),
+     .global_index_in(global_index_id),
+     .bimodal_prediction_in(bimodal_prediction_id),
+     .global_prediction_in(global_prediction_id),
      .ID_EX_write(ID_EX_write_final),
 
      .pc_out(current_pc_ex),
@@ -484,6 +559,9 @@ module PIPELINED_CPU(
       .csr_rdata_out(CSR_rdata_ex),
       .predicted_taken_out(predicted_taken_ex),
      .bht_index_out(bht_index_ex),
+     .global_index_out(global_index_ex),
+     .bimodal_prediction_out(bimodal_prediction_ex),
+     .global_prediction_out(global_prediction_ex),
      .ID_EX_flush(ID_EX_flush_final),
      .valid_in(valid_id),
      .valid_out(valid_ex)
@@ -515,6 +593,9 @@ module PIPELINED_CPU(
       .CSR_rdata_in(CSR_rdata_ex),
       .predicted_taken_in(predicted_taken_ex),
      .bht_index_in(bht_index_ex),
+     .global_index_in(global_index_ex),
+     .bimodal_prediction_in(bimodal_prediction_ex),
+     .global_prediction_in(global_prediction_ex),
      .EX_MEM_write(EX_MEM_write_final),
 
 
@@ -542,6 +623,9 @@ module PIPELINED_CPU(
       
       .predicted_taken_out(predicted_taken_mem),
      .bht_index_out(bht_index_mem),
+     .global_index_out(global_index_mem),
+     .bimodal_prediction_out(bimodal_prediction_mem),
+     .global_prediction_out(global_prediction_mem),
      .EX_MEM_flush(control_flush_mem),
      .valid_in(valid_ex),
      .valid_out(valid_mem),
@@ -559,6 +643,7 @@ module PIPELINED_CPU(
     .Regwrite_in(Regwrite_commit_mem),
     .clk(clk),
     .reset(reset),
+    .MEM_WB_write(MEM_WB_write_final),
     .CSR_rdata_in(CSR_rdata_mem),
     .CSRtoReg_in(CSRtoReg_mem),
 
@@ -568,7 +653,7 @@ module PIPELINED_CPU(
     .instruction64_out(instruction64_wb),
     .instruction_out(instruction_wb),
     .pc_plus4_out(pc_plus4_wb),
-    .Regwrite_out(Regwrite_wb),
+    .Regwrite_out(Regwrite_forward_wb),
     .CSR_rdata_out(CSR_rdata_wb),
     .CSRtoReg_out(CSRtoReg_wb)
 
@@ -579,11 +664,26 @@ module PIPELINED_CPU(
     .rd_mem(instruction_mem[11:7]),
     .rd_wb(instruction_wb[11:7]),
     .Regwrite_mem(Regwrite_commit_mem),
-    .Regwrite_wb(Regwrite_wb),
+    .Regwrite_wb(Regwrite_forward_wb),
     .forwardA(forwardA),
     .forwardB(forwardB)
 
    );
+
+   // MEM/WB is held during a D-Cache stall so its value remains available
+   // to EX forwarding.  The older WB instruction may still retire once at
+   // the beginning of the stall, but must not be written repeatedly.
+   always @(posedge clk) begin
+     if(reset)
+       wb_stall_commit_done <= 1'b0;
+     else if(dcache_stall)
+       wb_stall_commit_done <= 1'b1;
+     else
+       wb_stall_commit_done <= 1'b0;
+   end
+
+   assign Regwrite_wb = Regwrite_forward_wb && ~wb_stall_commit_done;
+
    HazardDetectionUnit u_hazarddetectionunit(
     .MemRead_ex(MemRead_ex),
     .rd_ex(instruction_ex[11:7]),
@@ -599,16 +699,27 @@ module PIPELINED_CPU(
 
 
    );
-   BranchPredictionUnit u_branchpredictionunit(
+   wire branch_resolve_valid_mem = valid_mem && Branch_mem && ~trap_enter;
+
+   BranchPredictionUnit #(
+    .PREDICTOR_MODE(BRANCH_PREDICTOR_MODE)
+   ) u_branchpredictionunit(
     .clk(clk),
     .reset(reset),
     .pc_if(current_pc_if),
     .instruction_if(instruction_if),
-    .branch_mem(Branch_mem),
+    .branch_mem(branch_resolve_valid_mem),
     .branch_taken_mem(branch_taken_mem),
     .bht_index_mem(bht_index_mem),
+    .global_index_mem(global_index_mem),
+    .bimodal_prediction_mem(bimodal_prediction_mem),
+    .global_prediction_mem(global_prediction_mem),
     .predicted_taken_if(predicted_taken_if),
-    .bht_index_if(bht_index_if)
+    .bht_index_if(bht_index_if),
+    .global_index_if(global_index_if),
+    .bimodal_prediction_if(bimodal_prediction_if),
+    .global_prediction_if(global_prediction_if),
+    .chooser_prefers_global_if(chooser_prefers_global_if)
 
 
 
@@ -677,6 +788,7 @@ module PIPELINED_CPU(
     .cpu_req_addr(dcache_cpu_req_addr),
     .cpu_req_write(dcache_cpu_req_write),
     .cpu_req_wdata(dcache_cpu_req_wdata),
+    .cpu_req_wstrb(dcache_cpu_req_wstrb),
 
     .cpu_req_ready(dcache_cpu_req_ready),
     .cpu_resp_valid(dcache_cpu_resp_valid),
@@ -689,12 +801,16 @@ module PIPELINED_CPU(
     .mem_req_valid(dcache_mem_req_valid),
     .mem_req_write(dcache_mem_req_write),
     .mem_req_addr(dcache_mem_req_addr),
-    .mem_req_wdata(dcache_mem_req_wdata)
+    .mem_req_wdata(dcache_mem_req_wdata),
+    .mem_req_wstrb(dcache_mem_req_wstrb)
     
 
 
    );
-   CacheBackingMemory u_dcache_backing_memory(
+   CacheBackingMemory #(
+    .MEM_WORDS(DCACHE_BACKING_WORDS),
+    .BASE_ADDR(DCACHE_BACKING_BASE_ADDR)
+   ) u_dcache_backing_memory(
     .clk(clk),
     .reset(reset),
 
@@ -702,6 +818,7 @@ module PIPELINED_CPU(
     .req_write(dcache_mem_req_write),
     .req_addr(dcache_mem_req_addr),
     .req_wdata(dcache_mem_req_wdata),
+    .req_wstrb(dcache_mem_req_wstrb),
 
     .req_ready(dcache_mem_req_ready),
     .resp_valid(dcache_mem_resp_valid),
@@ -727,7 +844,10 @@ module PIPELINED_CPU(
 
    );
 
-   CacheBackingMemory u_icache_backing_memory(
+   CacheBackingMemory #(
+    .MEM_WORDS(ICACHE_BACKING_WORDS),
+    .BASE_ADDR(ICACHE_BACKING_BASE_ADDR)
+   ) u_icache_backing_memory(
     .clk(clk),
     .reset(reset),
 
@@ -735,6 +855,7 @@ module PIPELINED_CPU(
     .req_write(1'b0),
     .req_addr(icache_mem_req_addr),
     .req_wdata(64'b0),
+    .req_wstrb(8'b0),
 
     .req_ready(icache_mem_req_ready),
     .resp_valid(icache_mem_resp_valid),
@@ -792,19 +913,32 @@ module PIPELINED_CPU(
 
     //Load misaligned unit
     always @(*) begin
-        if(MemRead_mem == 1'b1 && aluresult_mem[2:0] != 3'b000 && valid_mem == 1'b1)
-          load_misaligned_mem = 1'b1;
-        else
-          load_misaligned_mem = 1'b0;
+        load_misaligned_mem = 1'b0;
+        if(MemRead_mem == 1'b1 && valid_mem == 1'b1) begin
+          case(instruction_mem[14:12])
+            3'b000, 3'b100: load_misaligned_mem = 1'b0; // LB/LBU
+            3'b001, 3'b101: load_misaligned_mem = aluresult_mem[0]; // LH/LHU
+            3'b010: load_misaligned_mem = (aluresult_mem[1:0] != 2'b00); // LW
+            3'b011: load_misaligned_mem = (aluresult_mem[2:0] != 3'b000); // LD
+            3'b110: load_misaligned_mem = (aluresult_mem[1:0] != 2'b00); // LWU
+            default: load_misaligned_mem = 1'b1;
+          endcase
+        end
             
     end
 
     //store misaligned unit
     always @(*) begin
-        if(MemWrite_mem == 1'b1 && aluresult_mem[2:0] != 3'b000 && valid_mem == 1'b1)
-          store_misaligned_mem = 1'b1;
-        else
-          store_misaligned_mem = 1'b0;
+        store_misaligned_mem = 1'b0;
+        if(MemWrite_mem == 1'b1 && valid_mem == 1'b1) begin
+          case(instruction_mem[14:12])
+            3'b000: store_misaligned_mem = 1'b0; // SB
+            3'b001: store_misaligned_mem = aluresult_mem[0]; // SH
+            3'b010: store_misaligned_mem = (aluresult_mem[1:0] != 2'b00); // SW
+            3'b011: store_misaligned_mem = (aluresult_mem[2:0] != 3'b000); // SD
+            default: store_misaligned_mem = 1'b1;
+          endcase
+        end
             
     end
 
@@ -835,7 +969,8 @@ module PIPELINED_CPU(
 
     //check whether the prediction is wrong or not
 
-    wire branch_mispredict_mem = Branch_mem && (predicted_taken_mem != branch_taken_mem);
+    wire branch_mispredict_mem = branch_resolve_valid_mem &&
+                                 (predicted_taken_mem != branch_taken_mem);
     
 
 
